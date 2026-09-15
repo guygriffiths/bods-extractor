@@ -21,12 +21,13 @@ source .venv/bin/activate
 ```bash
 # Create an empty database with the current schema.
 # Rarely needed on its own - 'build' calls this as its first step.
-bodsDB --db data/output/fares_v2.db init
+# The --db argument can be added to any command but this is the default
+bodsDB --db data/output/fares.db init
 
 # Build everything in one step: init, then stops, fares and postcodes,
 # always for the whole of Great Britain. This is the command to actually
 # assemble a real database - expect roughly an hour for the full archive.
-bodsDB --db data/output/fares_v2.db build
+bodsDB build
 ```
 
 ### Scoped ingestion, for debugging only
@@ -38,29 +39,29 @@ for that.
 
 ```bash
 # Load bus stops from NaPTAN on their own (build calls this too).
-bodsDB --db data/output/fares_v2.db ingest-stops --stops-csv data/raw/Stops.csv
+bodsDB ingest-stops --stops-csv data/raw/Stops.csv
 
 # Re-parse fares for everything touching Tyne & Wear only.
-bodsDB --db data/output/fares_v2.db ingest-fares \
+bodsDB ingest-fares \
   --archive data/raw/bodds_fares_archive_20260803.zip --atco-prefix 4100
 
 # Re-parse fares for one specific operator instead of a whole area.
-bodsDB --db data/output/fares_v2.db ingest-fares \
+bodsDB ingest-fares \
   --archive data/raw/bodds_fares_archive_20260803.zip --noc GNEL
 
 # Stop after the first 500 files - useful while developing netex.py.
-bodsDB --db data/output/fares_v2.db ingest-fares \
+bodsDB ingest-fares \
   --archive data/raw/bodds_fares_archive_20260803.zip --limit 500
 
 # Attach postcodes to stops, for Tyne & Wear only (much faster than national).
-bodsDB --db data/output/fares_v2.db ingest-postcodes \
+bodsDB ingest-postcodes \
   --codepoint data/raw/codepo_gb.gpkg --atco-prefix 4100
 ```
 
 ### Finding out which operators hide inside a publisher account
 
 ```bash
-bodsDB --db data/output/fares_v2.db discover --folder "Go-Ahead Group plc_10"
+bodsDB discover --folder "Go-Ahead Group plc_10"
 ```
 
 > **Note:** `discover` samples a limited number of files per folder (60 by
@@ -77,14 +78,14 @@ bodsDB --db data/output/fares_v2.db discover --folder "Go-Ahead Group plc_10"
 
 ```bash
 # Every operator with a zoned stop in Tyne & Wear (ATCO area 4100).
-bodsDB --db data/output/fares_v2.db export \
+bodsDB export \
   --atco-prefix 4100 --mode fill --out data/export/newcastle/
 
 # Just one operator.
-bodsDB --db data/output/fares_v2.db export --noc GNEL --out /tmp/gnel_export
+bodsDB export --noc GNEL --out /tmp/gnel_export
 
 # High-confidence rows only (tier 1-2), adults only.
-bodsDB --db data/output/fares_v2.db export --noc GNEL --out /tmp/gnel_strict \
+bodsDB export --noc GNEL --out /tmp/gnel_strict \
   --max-tier 2 --user-type adult
 ```
 
@@ -94,32 +95,32 @@ bodsDB --db data/output/fares_v2.db export --noc GNEL --out /tmp/gnel_strict \
 
 ```bash
 # Coverage and provenance stats for an area.
-bodsDB --db data/output/fares_v2.db report --atco-prefix 4100
+bodsDB report --atco-prefix 4100
 
 # Find the NOC behind an operator's public-facing name.
-bodsDB --db data/output/fares_v2.db operators "Go North East"
+bodsDB operators "Go North East"
 
 # Fares between two known bus stops (ATCO codes).
-bodsDB --db data/output/fares_v2.db fare 410000024296 410000025301
+bodsDB fare 410000024296 410000025301
 
 # Same, restricted to one operator and passenger class.
-bodsDB --db data/output/fares_v2.db fare 07605093 07605083 --noc ANEA --user-type child
+bodsDB fare 07605093 07605083 --noc ANEA --user-type child
 
 # Fares between two postcodes - no ATCO code or NOC needed. Resolves each
 # postcode to every stop it reaches, then checks every operator and every
 # zone combination for you.
-bodsDB --db data/output/fares_v2.db postcode-fare "NE1 5DX" "NE9 6AA"
+bodsDB postcode-fare "NE1 5DX" "NE9 6AA"
 
 # Same, for a young-person fare.
-bodsDB --db data/output/fares_v2.db postcode-fare "NE1 5DX" "NE9 6AA" --user-type youngPerson
+bodsDB postcode-fare "NE1 5DX" "NE9 6AA" --user-type youngPerson
 
 # Plan a real journey via Google Maps and price each leg. Demo only - not
 # part of the deliverable, but useful for sanity-checking against a real route.
-bodsDB --db data/output/fares_v2.db journey \
+bodsDB journey \
   "Newcastle Central Station" "Gateshead Interchange" --api-key YOUR_KEY
 
 # Verbose logging works on any command.
-bodsDB --db data/output/fares_v2.db -v report --atco-prefix 4100
+bodsDB -v report --atco-prefix 4100
 ```
 
 ---
@@ -139,6 +140,6 @@ bodsDB --db data/output/fares_v2.db -v report --atco-prefix 4100
 ./.venv/bin/python tools/freeze_baseline.py
 
 # Replay the frozen cases against a rebuilt database and diff.
-./.venv/bin/python tools/compare_baseline.py --db data/output/fares_v2.db \
+./.venv/bin/python tools/compare_baseline.py \
   --baseline tests/baseline_4100.json
 ```
