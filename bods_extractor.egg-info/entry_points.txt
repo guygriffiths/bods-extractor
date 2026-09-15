@@ -1,3 +1,0 @@
-[console_scripts]
-bodsDB = bods_extractor.cli:cli
-

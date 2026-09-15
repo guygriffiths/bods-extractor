@@ -1,0 +1,23 @@
+# Environments / secrets
+.env
+.venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Data (large, external, or generated)
+# "data" is a symlink to an external directory, so it needs the bare name as
+# well as the trailing-slash form - git treats a symlink as a file, and "data/"
+# alone does not match it.
+data
+data/
+*.db
+*.gpkg
+*.zip
+
+# OS
+.DS_Store
