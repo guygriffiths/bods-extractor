@@ -51,7 +51,7 @@ Check what you got, or query it directly without going near a CSV:
 
 ```bash
 bodsDB --db $DB report --atco-prefix 4100
-bodsDB --db $DB fare 4100Z0000001 4100Z0000002
+bodsDB --db $DB fare 410000024296 410000025301
 bodsDB --db $DB postcode-fare "NE1 5DX" "NE9 6AA"
 ```
 
