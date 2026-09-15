@@ -77,6 +77,28 @@ up by `atco_code`. This avoids the postcode approximation entirely.
 If you have coordinates but not ATCO codes, `<NOC>_zones.csv` includes latitude
 and longitude for every stop, so you can match to the nearest one.
 
+### Route C — ask the database directly, no CSVs at all
+
+Everything above is also available as a live lookup, if you'd rather not read a
+file:
+
+```bash
+# Two postcodes, no operator or zone lookup needed - it checks every operator
+# and every zone combination for you.
+bodsDB --db fares_v2.db postcode-fare "NE1 5DX" "NE9 6AA"
+
+# Same, for a specific passenger class
+bodsDB --db fares_v2.db postcode-fare "NE1 5DX" "NE9 6AA" --user-type youngPerson
+
+# Two known bus stops (ATCO codes)
+bodsDB --db fares_v2.db fare 410000024296 410000025301
+```
+
+This queries the same database the CSVs were exported from, so the two are
+always consistent with each other. Use whichever suits your integration — the
+CSVs for a static/offline copy, the CLI (or the `bods_extractor.fares` Python
+API behind it) for a live one.
+
 ---
 
 ## 3. Going from an operator name to a NOC

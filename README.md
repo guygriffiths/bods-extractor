@@ -29,23 +29,30 @@ large is committed):
 | `Stops.csv` | [NaPTAN](https://beta-naptan.dft.gov.uk/download) national stop register | 101 MB |
 | `codepo_gb.gpkg` | Ordnance Survey Code-Point Open (GeoPackage) | 277 MB |
 
-Then build a regional database — Tyne & Wear (ATCO area `4100`) as the worked example:
+Then build the database. `build` does this in one step — init, then ingest
+stops, fares and postcodes, always for the whole of Great Britain:
 
 ```bash
 DB=data/output/fares_v2.db
 
-bodsDB --db $DB ingest-stops
-bodsDB --db $DB ingest-fares      --atco-prefix 4100
-bodsDB --db $DB ingest-postcodes  --atco-prefix 4100
-bodsDB --db $DB export            --atco-prefix 4100 --mode fill \
-                                  --out data/export/newcastle/
+bodsDB --db $DB build
 ```
 
-Check what you got:
+This parses all 183,569 archive files, so expect a long run (roughly an hour;
+WAL file growth is the progress signal if the console goes quiet). Exporting
+CSVs is comparatively instant and scoped to whichever operators or area you
+want, e.g. Tyne & Wear (ATCO area `4100`):
+
+```bash
+bodsDB --db $DB export --atco-prefix 4100 --mode fill --out data/export/newcastle/
+```
+
+Check what you got, or query it directly without going near a CSV:
 
 ```bash
 bodsDB --db $DB report --atco-prefix 4100
 bodsDB --db $DB fare 4100Z0000001 4100Z0000002
+bodsDB --db $DB postcode-fare "NE1 5DX" "NE9 6AA"
 ```
 
 Paths default to `data/raw` / `data/output` and can be overridden with the
@@ -58,26 +65,36 @@ environment variables in [`bods_extractor/config.py`](bods_extractor/config.py)
 
 | Command | Purpose |
 |---|---|
-| `ingest-stops` | Load the NaPTAN stop register (ATCO code → name, locality, coordinates). |
-| `discover` | Show which operators (NOCs) hide inside each BODS publisher account. |
-| `ingest-fares` | Parse the NeTEx archive into zones and fares. |
-| `ingest-postcodes` | Match every stop to its nearest Code-Point postcode. |
+| `build` | **Build the whole database**: init + ingest-stops + ingest-fares + ingest-postcodes, unscoped. Start here. |
 | `export` | Write per-operator zone / postcode / fare CSVs plus a manifest. |
 | `report` | Coverage and provenance statistics. |
 | `operators` | Resolve a trading name to a NOC. |
 | `fare` | Look up fares between two ATCO codes. Offline. |
+| `postcode-fare` | Look up fares between two postcodes, no ATCO code or NOC needed. Offline. |
 | `journey` | Demo only: Google Directions + the local database. |
+| `discover` | Show which operators (NOCs) hide inside each BODS publisher account. |
+| `init` | Create an empty database with the current schema. Called by `build`; rarely needed on its own. |
+| `ingest-stops` | Load the NaPTAN stop register. Called by `build`; run alone only to refresh stops. |
+| `ingest-fares` | Parse the NeTEx archive into zones and fares. Called by `build`. |
+| `ingest-postcodes` | Match every stop to its nearest Code-Point postcode. Called by `build`. |
 
 Every command takes `--help`.
 
-### Scoping an ingest
+### `build` vs the individual `ingest-*` commands
 
-`ingest-fares` reads the whole archive by default and keeps whatever matches
-your filters:
+**`build` is the command for assembling a real database.** It always processes
+the full national archive; there is deliberately no flag to scope it, because a
+database built one area at a time would leave every other operator's data stale
+or missing, and stops/postcodes need loading nationally regardless of which
+area you care about.
 
-- `--atco-prefix 4100` — keep only fares touching stops in that ATCO
-  administrative area. This is the right filter for "all the Newcastle operators",
-  because it does not require knowing their names first.
+The `ingest-stops` / `ingest-fares` / `ingest-postcodes` commands still exist
+separately, and `ingest-fares` and `ingest-postcodes` still take `--noc` /
+`--atco-prefix` / `--folder` filters. These are for **debugging only** — a quick
+re-run against one operator or area while working on the parser, without waiting
+for a full national ingest:
+
+- `--atco-prefix 4100` — keep only rows touching stops in that ATCO area.
 - `--noc GNEL --noc SCNE` — keep only these operators. Adds a cheap filename
   pre-filter; pass `--scan-all` to disable it (see the caveat in
   `FareIngester._filename_may_match` — Stagecoach's filenames do not contain
@@ -85,8 +102,9 @@ your filters:
 - `--folder "Go-Ahead Group plc_10"` — restrict to a publisher account. Fastest,
   but you must already know which accounts matter. Use `discover` to find out.
 
-Re-running an ingest replaces only the operators it touches
-(`db.reset_operators`), so you can add an operator without rebuilding everything.
+Re-running a scoped ingest replaces only the operators it touches
+(`db.reset_operators`) or the area it touches (`db.reset_area`), so a debug run
+does not corrupt the rest of an already-built database.
 
 ---
 
@@ -180,8 +198,8 @@ replay the same stop pairs against a rebuilt one and diff.
 - **Small samples mislead.** Sampling 40 files per folder reported Go North East,
   Stagecoach North East and both Arriva north-east operators as absent from the
   archive. They are all present in quantity.
-- **`ingest-fares` without `--folder` reads all 183,569 XML files.** Expect a long
-  run. Use `--limit` while developing.
+- **`build` reads all 183,569 XML files.** Expect a long run. Use `ingest-fares
+  --limit N` while developing, not `build`.
 
 ### Security
 

@@ -21,6 +21,7 @@ from .config import (ATCO_AREAS, DEFAULT_ARCHIVE, DEFAULT_CODEPOINT, DEFAULT_DB,
 from .db import get_connection, init_db
 from .fares import FareLookup
 from .lookup import plan_journey
+from .postcodes import truncate_postcode
 
 load_dotenv()
 
@@ -56,9 +57,51 @@ def cli(ctx, db, verbose):
 @cli.command("init")
 @click.pass_context
 def init_command(ctx):
-    """Create an empty database with the current schema."""
+    """Create an empty database with the current schema.
+
+    You will not normally need this on its own - 'build' calls it as its first
+    step. It exists separately for scripting and debugging.
+    """
     init_db(ctx.obj["db"])
     click.echo(f"Initialised {ctx.obj['db'] or DEFAULT_DB}")
+
+
+@cli.command("build")
+@click.option("--archive", type=click.Path(exists=True, path_type=Path), default=None,
+              help=f"BODS fares archive zip (default: {DEFAULT_ARCHIVE}).")
+@click.option("--stops-csv", type=click.Path(exists=True, path_type=Path),
+              default=None, help=f"NaPTAN Stops.csv (default: {DEFAULT_STOPS_CSV}).")
+@click.option("--codepoint", type=click.Path(exists=True, path_type=Path), default=None,
+              help=f"Code-Point Open GeoPackage (default: {DEFAULT_CODEPOINT}).")
+@click.option("--include-capped", is_flag=True,
+              help="Include £2/£3 capped and promotional products.")
+@click.pass_context
+def build_command(ctx, archive, stops_csv, codepoint, include_capped):
+    """Build the whole database: init, then ingest stops, fares and postcodes.
+
+    This is the command to actually build a usable database - it always
+    processes the full national archive. The --noc/--atco-prefix/--folder
+    options on the individual ingest-* commands exist for quick, scoped debug
+    runs, not for building the real dataset; running them one area at a time
+    would leave every other operator's data stale or missing.
+    """
+    db_path = ctx.obj["db"]
+
+    init_db(db_path)
+    click.echo(f"Initialised {db_path or DEFAULT_DB}")
+
+    stop_count = ingest_module.ingest_stops(db_path, stops_csv, active_only=True)
+    click.echo(f"Loaded {stop_count:,} stops.")
+
+    ingester = ingest_module.FareIngester(db_path=db_path, include_capped=include_capped)
+    summary = ingester.run(archive)
+    click.echo(f"Parsed {summary.files_parsed:,} fare files, "
+               f"{len(summary.operators)} operators, {summary.fare_rows:,} fare rows.")
+
+    postcode_count = postcodes_module.ingest_stop_postcodes(db_path, codepoint)
+    click.echo(f"Mapped {postcode_count:,} stops to postcodes.")
+
+    click.echo("\nDatabase built. Run 'export' to write CSVs.")
 
 
 @cli.command("ingest-stops")
@@ -70,7 +113,11 @@ def init_command(ctx):
               help="Keep only BCT on-street bus stops.")
 @click.pass_context
 def ingest_stops_command(ctx, stops_csv, include_inactive, bus_only):
-    """Load the NaPTAN national stop register."""
+    """Load the NaPTAN national stop register.
+
+    Part of 'build'. Run this on its own only to re-load stops without
+    re-parsing the whole fares archive.
+    """
     count = ingest_module.ingest_stops(
         ctx.obj["db"], stops_csv,
         active_only=not include_inactive, bus_only=bus_only)
@@ -95,7 +142,13 @@ def ingest_stops_command(ctx, stops_csv, include_inactive, bus_only):
 @click.pass_context
 def ingest_fares_command(ctx, archive, folders, nocs, atco_prefix, scan_all,
                          include_capped, limit):
-    """Parse the BODS NeTEx fares archive into the database."""
+    """Parse the BODS NeTEx fares archive into the database.
+
+    Part of 'build', which calls this with no scoping to process the whole
+    archive. --noc/--folder/--atco-prefix here are for a quick debug run
+    against one operator or area, not for assembling the real database -
+    using them piecemeal leaves everything else in the database stale.
+    """
     ingester = ingest_module.FareIngester(
         db_path=ctx.obj["db"], folders=folders, nocs=nocs,
         atco_prefix=atco_prefix, scan_all=scan_all,
@@ -123,7 +176,11 @@ def ingest_fares_command(ctx, archive, folders, nocs, atco_prefix, scan_all,
               help="Only map stops in this ATCO area. Much faster for a regional job.")
 @click.pass_context
 def ingest_postcodes_command(ctx, codepoint, atco_prefix):
-    """Map every bus stop to its nearest postcode."""
+    """Map every bus stop to its nearest postcode.
+
+    Part of 'build'. --atco-prefix here is for a quick debug run over one
+    area only.
+    """
     count = postcodes_module.ingest_stop_postcodes(
         ctx.obj["db"], codepoint, atco_prefix=atco_prefix)
     click.echo(f"Mapped {count:,} stops to postcodes.")
@@ -251,6 +308,26 @@ def operators_command(ctx, name):
 # Querying
 # --------------------------------------------------------------------------
 
+def _print_quotes(quotes, sort_cheapest_first: bool = False) -> None:
+    """Shared table renderer for ``fare`` and ``postcode-fare``.
+
+    The same fare is often published once per route variant. Collapse them for
+    display; the CSV export keeps every row with its line reference.
+    """
+    if sort_cheapest_first:
+        quotes = sorted(quotes, key=lambda q: (q.price, q.source_tier))
+    click.echo(f"{'OPERATOR':<26} {'PRODUCT':<11} {'PRICE':>7}  {'MATCH':<15} TIER  NAME")
+    seen = set()
+    for quote in quotes:
+        key = (quote.noc, quote.product_type, quote.price, quote.product_name)
+        if key in seen:
+            continue
+        seen.add(key)
+        click.echo(f"{quote.operator_name[:25]:<26} {quote.product_type:<11} "
+                   f"£{quote.price:>6.2f}  {quote.zone_match:<15} {quote.source_tier:^4}  "
+                   f"{quote.product_name[:30]}")
+
+
 @cli.command("fare")
 @click.argument("origin_atco")
 @click.argument("destination_atco")
@@ -272,19 +349,55 @@ def fare_command(ctx, origin_atco, destination_atco, noc, user_type, max_tier):
         click.echo("No fare found. Try --max-tier 4, a different --user-type, "
                    "or check both stops are in the same operator's network.")
         return
+    _print_quotes(quotes)
 
-    click.echo(f"{'OPERATOR':<26} {'PRODUCT':<11} {'PRICE':>7}  {'MATCH':<15} TIER  NAME")
-    # The same fare is often published once per route variant. Collapse them
-    # for display; the CSV export keeps every row with its line reference.
-    seen = set()
-    for quote in quotes:
-        key = (quote.noc, quote.product_type, quote.price, quote.product_name)
-        if key in seen:
-            continue
-        seen.add(key)
-        click.echo(f"{quote.operator_name[:25]:<26} {quote.product_type:<11} "
-                   f"£{quote.price:>6.2f}  {quote.zone_match:<15} {quote.source_tier:^4}  "
-                   f"{quote.product_name[:30]}")
+
+@cli.command("postcode-fare")
+@click.argument("origin_postcode")
+@click.argument("destination_postcode")
+@click.option("--noc", default=None, help="Restrict to one operator.")
+@click.option("--user-type", default="adult")
+@click.option("--max-tier", type=int, default=4)
+@click.pass_context
+def postcode_fare_command(ctx, origin_postcode, destination_postcode, noc,
+                         user_type, max_tier):
+    """Look up fares between two postcodes. No NOC, ATCO code or zone lookup required.
+
+    This is the no-manual-lookup version of ``fare``: it truncates each
+    postcode the same way the CSV export does, finds every stop each one
+    reaches, and returns every fare between any origin stop and any
+    destination stop - across every operator that serves both, cheapest first.
+    You do not need to know which operator runs the route, or which of a
+    stop's many fare zones applies; this checks all of them.
+    """
+    origin_trunc = truncate_postcode(origin_postcode)
+    dest_trunc = truncate_postcode(destination_postcode)
+
+    with FareLookup(ctx.obj["db"]) as lookup:
+        origins = lookup.stops_for_postcode(origin_trunc)
+        destinations = lookup.stops_for_postcode(dest_trunc)
+        quotes = [quote
+                 for origin in origins
+                 for destination in destinations
+                 for quote in lookup.fares_between(
+                     origin.atco_code, destination.atco_code, noc=noc,
+                     user_type=user_type, max_tier=max_tier)]
+
+    click.echo(f"\n{origin_trunc} ({len(origins)} stop(s)) -> "
+               f"{dest_trunc} ({len(destinations)} stop(s))\n")
+    if not origins:
+        click.echo(f"No stops found near postcode {origin_trunc}. Check it is "
+                   "correct, or that ingest-postcodes has covered this area.")
+        return
+    if not destinations:
+        click.echo(f"No stops found near postcode {dest_trunc}. Check it is "
+                   "correct, or that ingest-postcodes has covered this area.")
+        return
+    if not quotes:
+        click.echo("No fare found. Try --max-tier 4, a different --user-type, "
+                   "or check the two postcodes are served by the same operator.")
+        return
+    _print_quotes(quotes, sort_cheapest_first=True)
 
 
 @cli.command("journey")
