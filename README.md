@@ -9,6 +9,8 @@ does the journey cost?** — without needing to know in advance which operator r
 - **Client-facing documentation** lives in [docs/METHODOLOGY.md](docs/METHODOLOGY.md)
   (how it works, what the data can and cannot support) and
   [docs/USER_GUIDE.md](docs/USER_GUIDE.md) (how to use the CSVs).
+- **[docs/COOKBOOK.md](docs/COOKBOOK.md)** has a working, copy-pasteable example
+  of every CLI command.
 - This file is for whoever maintains or rebuilds the database.
 
 ---
